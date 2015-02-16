@@ -1,0 +1,97 @@
+#!/bin/bash
+
+UBOOT_SCRIPTS=`pwd`
+UBOOT_SRC="$UBOOT_SCRIPTS/.."
+UBOOT_LOG="$UBOOT_SRC/logs"
+
+if [ -e "/home/test/host_config.sh" ] ; then
+. /home/test/host_config.sh
+else
+echo "No host_config.sh exists in home dir!"
+exit
+fi
+
+export UBOOT_SCRIPTS UBOOT_SRC UBOOT_LOG
+
+if [ ! -d $UBOOT_LOG ] ; then
+  mkdir -p $UBOOT_LOG
+fi
+
+TIMESTAMP=`date +%Y_%m_%d_%H_%M`
+if [ $# -gt 0 ] ; then
+TIMESTAMP=$1
+else
+TIMESTAMP=`date +%Y_%m_%d_%H_%M`
+fi
+echo "TIMESTAMP is $TIMESTAMP\n"
+
+if [ $BOARD_TYPE = "BF609-EZKIT" ] ; then
+testrounds=5
+elif [ $BOARD_TYPE = "BF527-EZKIT" ] ; then
+testrounds=2
+else
+testrounds=3
+fi
+
+cd $UBOOT_LOG
+rm -f *log test_results uboot.diff /tftpboot/u-boot.bin.* /tftpboot/u-boot.ldr.*
+mv summary lastrun-summary  > /dev/null 2>&1
+
+cp /home/test/reset_board  $UBOOT_SRC/test_script
+# To restore the changes made in last release and sync to the repository.
+cd $UBOOT_SRC
+git checkout .
+
+cd $UBOOT_SCRIPTS
+$UBOOT_SCRIPTS/uboot_misc_test.exp $BOARD_TYPE > /dev/null 2>&1
+
+#Add this line to disable kgdb for watchdog test running.
+if [ $BOARD_TYPE = "BF609-EZKIT" ] ; then
+sed -i  "/bfin_adi_common.h/ a #  define CONFIG_WATCHDOG_TIMEOUT_MSECS 15000" $UBOOT_SRC/include/configs/bf609-ezkit.h
+sed -i  "/bfin_adi_common.h/ a #define CONFIG_HW_WATCHDOG" $UBOOT_SRC/include/configs/bf609-ezkit.h
+sed -i  "/bfin_adi_common.h/ a #undef CONFIG_CMD_KGDB" $UBOOT_SRC/include/configs/bf609-ezkit.h
+fi
+
+cd $UBOOT_SCRIPTS
+for TEST_ROUND in `seq 0 $testrounds` ;
+do
+     $UBOOT_SCRIPTS/uboot-test $BOARD_TYPE $TEST_ROUND
+    if [ $? != 2 ] ; then
+        if [ -e /tftpboot/u-boot.bin ]; then
+            mv -f /tftpboot/u-boot.bin /tftpboot/u-boot.bin.$TEST_ROUND
+        fi
+        if [ -e /tftpboot/u-boot.ldr ]; then
+            mv -f /tftpboot/u-boot.ldr /tftpboot/u-boot.ldr.$TEST_ROUND
+        fi
+    fi
+done
+
+#cd $UBOOT_LOG
+#e=`ls *-summary-* | wc -l`
+#if [ $e != 0 ] ; then
+#    cat *-summary-* > summary
+#    svn info $UBOOT_SRC |grep "Revision" >> summary
+#fi
+#
+#$UBOOT_SCRIPTS/compare_uboot_results lastrun-summary  summary > uboot.diff
+#test_status=$?
+#if [ $test_status = 0 ] ; then
+#    echo  "success"  > test_results
+#    cat uboot.diff
+#    # echo  "Don't send email of uboot test."
+#else
+#    echo  "failed" > test_results
+#    echo
+#    cat uboot.diff
+#    cat summary
+#    # echo  "Sent email of uboot test."
+#fi
+
+cd $UBOOT_LOG
+mkdir -p $UBOOT_LOG/$TIMESTAMP
+cp -fr *log /tftpboot/u-boot.bin.* /tftpboot/u-boot.ldr.* $UBOOT_LOG/$TIMESTAMP
+cp -f summary $UBOOT_LOG/$TIMESTAMP/summary
+$UBOOT_SCRIPTS/convert_test_summary summary $TIMESTAMP 
+echo "$UBOOT_SCRIPTS/convert_test_summary summary $TIMESTAMP $test_status"
+cat result.xml
+rm -f $UBOOT_SRC/u-boot.bin $UBOOT_SRC/u-boot.ldr
